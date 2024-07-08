@@ -1,6 +1,8 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, send_file
 import requests
 from bs4 import BeautifulSoup
+import csv
+from io import BytesIO, StringIO
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -41,6 +43,12 @@ HTML_TEMPLATE = '''
                 </tr>
                 {% endfor %}
             </table>
+            <form method="POST" action="/export">
+                <input type="hidden" name="keyword" value="{{ keyword }}">
+                <input type="hidden" name="location" value="{{ location }}">
+                <input type="hidden" name="ignore_location" value="{{ ignore_location }}">
+                <button type="submit">Export to CSV</button>
+            </form>
         {% endif %}
     </body>
 </html>
@@ -50,6 +58,7 @@ HTML_TEMPLATE = '''
 @app.route('/', methods=['GET', 'POST'])
 def index():
     results = []  # Initialize results list
+    keyword, location, ignore_location = None, None, None  # Ensure variables are always defined
     if request.method == 'POST':  # Check if the form is submitted via POST
         keyword = request.form.get('keyword')  # Get the keyword from the form
         location = request.form.get('location')  # Get the location from the form
@@ -63,7 +72,44 @@ def index():
             # Display message if keyword is not provided
             results = [{'position': 'N/A', 'url': 'N/A', 'title': 'N/A', 'description': 'Please fill out the keyword field.'}]
     # Render the HTML template with the results
-    return render_template_string(HTML_TEMPLATE, results=results)
+    return render_template_string(HTML_TEMPLATE, results=results, keyword=keyword, location=location, ignore_location=ignore_location)
+
+# Route for exporting results to CSV
+@app.route('/export', methods=['POST'])
+def export():
+    keyword = request.form.get('keyword')
+    location = request.form.get('location')
+    ignore_location = request.form.get('ignore_location')
+    if keyword:
+        if ignore_location:
+            results = scrape_google_results(keyword)
+        else:
+            results = scrape_google_results(keyword, location)
+        
+        # Create CSV data
+        si = StringIO()
+        cw = csv.writer(si)
+        cw.writerow(['Position', 'URL', 'Meta Title', 'Meta Description'])
+        for result in results:
+            cw.writerow([result['position'], result['url'], result['title'], result['description']])
+        
+        # Get CSV content as string
+        output = si.getvalue()
+        si.close()
+        
+        # Convert string to bytes and write to BytesIO
+        bio = BytesIO()
+        bio.write(output.encode('utf-8'))
+        bio.seek(0)
+        
+        # Send the CSV file as a response
+        return send_file(
+            bio,
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'results_{keyword}.csv'
+        )
+    return "No keyword provided", 400
 
 # Function to scrape Google search results
 def scrape_google_results(keyword, location=None):
